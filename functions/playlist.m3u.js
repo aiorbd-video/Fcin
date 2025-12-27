@@ -1,14 +1,24 @@
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 function deny() {
   const ref =
     "R-" +
     crypto.randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase();
 
+  const edge = "edge-" + Math.floor(Math.random() * 900 + 100);
+  const time = new Date().toUTCString();
+
   return new Response(
-    `Access Denied
+`Access Denied
 
 You don't have permission to access this resource.
 
-Reference #${ref}`,
+Reference #${ref}
+Edge: ${edge}
+Time: ${time}
+`,
     {
       status: 403,
       headers: {
@@ -21,34 +31,37 @@ Reference #${ref}`,
 
 export async function onRequest({ request }) {
   const ALLOWED_ORIGIN = "https://bd71.vercel.app";
-  const SECRET_TOKEN = "BD71_JS_ACCESS_2025"; // 🔑 change anytime
 
   const origin = request.headers.get("Origin");
   const referer = request.headers.get("Referer");
-  const token = request.headers.get("X-BD71-TOKEN");
 
-  // 🔒 Hard check: domain + token
+  // 🔒 Domain lock (best possible without JS)
   if (
-    token !== SECRET_TOKEN ||
     !(
       (origin && origin.startsWith(ALLOWED_ORIGIN)) ||
       (referer && referer.startsWith(ALLOWED_ORIGIN))
     )
   ) {
+    // 🕳️ Silent drop
+    await sleep(6000);
     return deny();
   }
 
-  // 🔗 SOURCE playlist
-  const SOURCE =
+  // 🔗 Main + Backup sources
+  const MAIN_SOURCE =
     "https://raw.githubusercontent.com/byte-capsule/FanCode-Hls-Fetcher/main/Fancode_Live.m3u";
 
-  const res = await fetch(SOURCE, {
-    headers: {
-      "User-Agent": "Mozilla/5.0",
-    },
-  });
+  const BACKUP_SOURCE =
+    "https://raw.githubusercontent.com/FunctionError/PiratesTv/main/combined_playlist.m3u";
 
-  if (!res.ok) return deny();
+  let res;
+  try {
+    res = await fetch(MAIN_SOURCE, { cf: { cacheTtl: 60 } });
+    if (!res.ok) throw new Error("Main failed");
+  } catch {
+    res = await fetch(BACKUP_SOURCE, { cf: { cacheTtl: 60 } });
+    if (!res.ok) return deny();
+  }
 
   const text = await res.text();
   const lines = text.split("\n");
@@ -70,7 +83,15 @@ export async function onRequest({ request }) {
 
   return new Response(output.join("\n"), {
     headers: {
+      // 🔐 Browser hardening
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY",
+      "Referrer-Policy": "no-referrer",
+
+      // Allow only bd71.vercel.app
       "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
+
+      // Browser shows text, IPTV compatible
       "Content-Type": "text/plain; charset=utf-8",
       "Content-Disposition": 'inline; filename="playlist.m3u"',
       "Cache-Control": "no-store",
